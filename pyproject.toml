@@ -7,7 +7,7 @@ name = "hackathon-jupyter-persona"
 version = "0.1.0"
 description = "GoodBot - A Jupyter AI persona for clinical data extraction hackathon"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "jupyter-ai-persona-manager",
     "jupyterlab-chat",
