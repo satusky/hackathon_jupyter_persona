@@ -4,10 +4,9 @@ import os
 
 import aiosqlite
 from jupyter_core.paths import jupyter_data_dir
-from langchain.agents import create_agent
-from langchain.agents.middleware import wrap_tool_call
-from langchain.messages import ToolMessage
+from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.prebuilt import create_react_agent
 
 MEMORY_STORE_PATH = os.path.join(
     jupyter_data_dir(), "jupyter_ai", "goodbot_memory.sqlite"
@@ -24,35 +23,13 @@ async def get_memory_store(
     return _store["instance"]
 
 
-def create_tool_error_handler(log):
-    """Creates middleware that catches tool exceptions and returns error messages."""
-
-    @wrap_tool_call
-    async def handle_tool_errors(request, handler):
-        try:
-            return await handler(request)
-        except Exception as e:
-            log.exception("Tool call raised an exception.")
-            return ToolMessage(
-                content=f"Tool error: Please check your input and try again. ({str(e)})",
-                tool_call_id=request.tool_call["id"],
-            )
-
-    return handle_tool_errors
-
-
 async def build_agent(model, tools, system_prompt, log=None):
     """Build a LangGraph agent with tools, memory, and error handling."""
     memory_store = await get_memory_store()
 
-    middleware = []
-    if log:
-        middleware.append(create_tool_error_handler(log))
-
-    return create_agent(
+    return create_react_agent(
         model,
-        system_prompt=system_prompt,
+        prompt=system_prompt,
         checkpointer=memory_store,
         tools=tools,
-        middleware=middleware,
     )
