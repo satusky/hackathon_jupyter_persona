@@ -1,0 +1,572 @@
+"""Wrapper around LiteLLM's model I/O library.
+
+Adapted from jupyter-ai-jupyternaut's ChatLiteLLM implementation.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TYPE_CHECKING,
+    Union,
+)
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.language_models.chat_models import (
+    BaseChatModel,
+    agenerate_from_stream,
+    generate_from_stream,
+)
+from langchain_core.language_models.llms import create_base_retry_decorator
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    BaseMessageChunk,
+    ChatMessage,
+    ChatMessageChunk,
+    FunctionMessage,
+    FunctionMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolCall,
+    ToolCallChunk,
+    ToolMessage,
+)
+from langchain_core.messages.ai import UsageMetadata
+from langchain_core.outputs import (
+    ChatGeneration,
+    ChatGenerationChunk,
+    ChatResult,
+)
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
+from langchain_core.utils import get_from_dict_or_env, pre_init
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from litellm import ModelResponseStream, Usage
+
+
+class ChatLiteLLMException(Exception):
+    """Error with the LiteLLM I/O library."""
+
+
+def _create_retry_decorator(
+    llm: ChatLiteLLM,
+    run_manager: Optional[
+        Union[AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun]
+    ] = None,
+) -> Callable[[Any], Any]:
+    import litellm
+
+    errors = [
+        litellm.Timeout,
+        litellm.APIError,
+        litellm.APIConnectionError,
+        litellm.RateLimitError,
+    ]
+    return create_base_retry_decorator(
+        error_types=errors, max_retries=llm.max_retries, run_manager=run_manager
+    )
+
+
+def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
+    role = _dict["role"]
+    if role == "user":
+        return HumanMessage(content=_dict["content"])
+    elif role == "assistant":
+        content = _dict.get("content", "") or ""
+        additional_kwargs = {}
+        if _dict.get("function_call"):
+            additional_kwargs["function_call"] = dict(_dict["function_call"])
+        if _dict.get("tool_calls"):
+            additional_kwargs["tool_calls"] = _dict["tool_calls"]
+        return AIMessage(content=content, additional_kwargs=additional_kwargs)
+    elif role == "system":
+        return SystemMessage(content=_dict["content"])
+    elif role == "function":
+        return FunctionMessage(content=_dict["content"], name=_dict["name"])
+    elif role == "tool":
+        return ToolMessage(content=_dict["content"], tool_call_id=_dict["tool_call_id"])
+    else:
+        return ChatMessage(content=_dict["content"], role=role)
+
+
+def _convert_delta_to_message_chunk(
+    delta: Union[Any, Dict[str, Any]], default_class: Type[BaseMessageChunk]
+) -> BaseMessageChunk:
+    if isinstance(delta, dict):
+        role = delta.get("role")
+        content = delta.get("content") or ""
+        function_call = delta.get("function_call")
+        raw_tool_calls = delta.get("tool_calls")
+        reasoning_content = delta.get("reasoning_content")
+    else:
+        role = delta.role
+        content = delta.content or ""
+        function_call = delta.function_call
+        raw_tool_calls = delta.tool_calls
+        reasoning_content = getattr(delta, "reasoning_content", None)
+
+    if function_call:
+        additional_kwargs = {"function_call": dict(function_call)}
+    elif reasoning_content:
+        additional_kwargs = {"reasoning_content": reasoning_content}
+    else:
+        additional_kwargs = {}
+
+    tool_call_chunks = []
+    if raw_tool_calls:
+        additional_kwargs["tool_calls"] = raw_tool_calls
+        try:
+            tool_call_chunks = [
+                ToolCallChunk(
+                    name=rtc["function"]["name"]
+                    if isinstance(rtc, dict)
+                    else rtc.function.name,
+                    args=rtc["function"]["arguments"]
+                    if isinstance(rtc, dict)
+                    else rtc.function.arguments,
+                    id=rtc["id"] if isinstance(rtc, dict) else rtc.id,
+                    index=rtc["index"] if isinstance(rtc, dict) else rtc.index,
+                )
+                for rtc in raw_tool_calls
+            ]
+        except KeyError:
+            pass
+
+    if role == "user" or default_class == HumanMessageChunk:
+        return HumanMessageChunk(content=content)
+    elif role == "assistant" or default_class == AIMessageChunk:
+        return AIMessageChunk(
+            content=content,
+            additional_kwargs=additional_kwargs,
+            tool_call_chunks=tool_call_chunks,
+        )
+    elif role == "system" or default_class == SystemMessageChunk:
+        return SystemMessageChunk(content=content)
+    elif role == "function" or default_class == FunctionMessageChunk:
+        if isinstance(delta, dict):
+            func_args = function_call.get("arguments", "") if function_call else ""
+            func_name = function_call.get("name", "") if function_call else ""
+        else:
+            func_args = delta.function_call.arguments if function_call else ""
+            func_name = delta.function_call.name if function_call else ""
+        return FunctionMessageChunk(content=func_args, name=func_name)
+    elif role or default_class == ChatMessageChunk:
+        return ChatMessageChunk(content=content, role=role)
+    else:
+        return default_class(content=content)
+
+
+def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> dict:
+    return {
+        "type": "function",
+        "id": tool_call["id"],
+        "function": {
+            "name": tool_call["name"],
+            "arguments": json.dumps(tool_call["args"]),
+        },
+    }
+
+
+def _convert_message_to_dict(message: BaseMessage) -> dict:
+    message_dict: Dict[str, Any] = {"content": message.content}
+    if isinstance(message, ChatMessage):
+        message_dict["role"] = message.role
+    elif isinstance(message, HumanMessage):
+        message_dict["role"] = "user"
+    elif isinstance(message, AIMessage):
+        message_dict["role"] = "assistant"
+        if "function_call" in message.additional_kwargs:
+            message_dict["function_call"] = message.additional_kwargs["function_call"]
+        if message.tool_calls:
+            message_dict["tool_calls"] = [
+                _lc_tool_call_to_openai_tool_call(tc) for tc in message.tool_calls
+            ]
+        elif "tool_calls" in message.additional_kwargs:
+            message_dict["tool_calls"] = message.additional_kwargs["tool_calls"]
+    elif isinstance(message, SystemMessage):
+        message_dict["role"] = "system"
+    elif isinstance(message, FunctionMessage):
+        message_dict["role"] = "function"
+        message_dict["name"] = message.name
+    elif isinstance(message, ToolMessage):
+        message_dict["role"] = "tool"
+        message_dict["tool_call_id"] = message.tool_call_id
+    else:
+        raise ValueError(f"Got unknown type {message}")
+    if "name" in message.additional_kwargs:
+        message_dict["name"] = message.additional_kwargs["name"]
+    return message_dict
+
+
+class ChatLiteLLM(BaseChatModel):
+    """Chat model that uses the LiteLLM API."""
+
+    client: Any = None
+    model: str = "openai/gpt-4o-mini"
+    model_name: Optional[str] = None
+    stream_options: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {"include_usage": True}
+    )
+    openai_api_key: Optional[str] = None
+    azure_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    replicate_api_key: Optional[str] = None
+    cohere_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    api_key: Optional[str] = None
+    streaming: bool = False
+    api_base: Optional[str] = None
+    organization: Optional[str] = None
+    custom_llm_provider: Optional[str] = None
+    request_timeout: Optional[Union[float, Tuple[float, float]]] = None
+    temperature: Optional[float] = None
+    model_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    n: Optional[int] = None
+    max_tokens: Optional[int] = None
+    max_retries: int = 1
+
+    @property
+    def _default_params(self) -> Dict[str, Any]:
+        set_model_value = self.model
+        if self.model_name is not None:
+            set_model_value = self.model_name
+        return {
+            "model": set_model_value,
+            "force_timeout": self.request_timeout,
+            "max_tokens": self.max_tokens,
+            "stream": self.streaming,
+            "n": self.n,
+            "temperature": self.temperature,
+            "custom_llm_provider": self.custom_llm_provider,
+            **self.model_kwargs,
+        }
+
+    @property
+    def _client_params(self) -> Dict[str, Any]:
+        set_model_value = self.model
+        if self.model_name is not None:
+            set_model_value = self.model_name
+        self.client.api_base = self.api_base
+        self.client.api_key = self.api_key
+        for named_api_key in [
+            "openai_api_key",
+            "azure_api_key",
+            "anthropic_api_key",
+            "replicate_api_key",
+            "cohere_api_key",
+            "openrouter_api_key",
+        ]:
+            if api_key_value := getattr(self, named_api_key):
+                setattr(
+                    self.client,
+                    named_api_key.replace("_api_key", "_key"),
+                    api_key_value,
+                )
+        self.client.organization = self.organization
+        creds: Dict[str, Any] = {
+            "model": set_model_value,
+            "force_timeout": self.request_timeout,
+            "api_base": self.api_base,
+        }
+        return {**self._default_params, **creds}
+
+    def completion_with_retry(
+        self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> Any:
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        def _completion_with_retry(**kwargs: Any) -> Any:
+            return self.client.completion(**kwargs)
+
+        return _completion_with_retry(**kwargs)
+
+    async def acompletion_with_retry(
+        self,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Any:
+        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+
+        @retry_decorator
+        async def _completion_with_retry(**kwargs: Any) -> Any:
+            return await self.client.acompletion(**kwargs)
+
+        return await _completion_with_retry(**kwargs)
+
+    @pre_init
+    def validate_environment(cls, values: Dict) -> Dict:
+        try:
+            import litellm
+        except ImportError:
+            raise ChatLiteLLMException(
+                "Could not import litellm python package. "
+                "Please install it with `pip install litellm`"
+            )
+
+        values["openai_api_key"] = get_from_dict_or_env(
+            values, "openai_api_key", "OPENAI_API_KEY", default=""
+        )
+        values["azure_api_key"] = get_from_dict_or_env(
+            values, "azure_api_key", "AZURE_API_KEY", default=""
+        )
+        values["anthropic_api_key"] = get_from_dict_or_env(
+            values, "anthropic_api_key", "ANTHROPIC_API_KEY", default=""
+        )
+        values["replicate_api_key"] = get_from_dict_or_env(
+            values, "replicate_api_key", "REPLICATE_API_KEY", default=""
+        )
+        values["openrouter_api_key"] = get_from_dict_or_env(
+            values, "openrouter_api_key", "OPENROUTER_API_KEY", default=""
+        )
+        values["cohere_api_key"] = get_from_dict_or_env(
+            values, "cohere_api_key", "COHERE_API_KEY", default=""
+        )
+        values["client"] = litellm
+
+        if values["temperature"] is not None and not 0 <= values["temperature"] <= 2:
+            raise ValueError("temperature must be in the range [0.0, 2.0]")
+
+        if values["top_p"] is not None and not 0 <= values["top_p"] <= 1:
+            raise ValueError("top_p must be in the range [0.0, 1.0]")
+
+        if values["top_k"] is not None and values["top_k"] <= 0:
+            raise ValueError("top_k must be positive")
+
+        return values
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        stream: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        should_stream = stream if stream is not None else self.streaming
+        if should_stream:
+            stream_iter = self._stream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            return generate_from_stream(stream_iter)
+
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs}
+        response = self.completion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
+        )
+        return self._create_chat_result(response)
+
+    def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        generations = []
+        token_usage = response.get("usage", {})
+        for res in response["choices"]:
+            message = _convert_dict_to_message(res["message"])
+            if isinstance(message, AIMessage):
+                message.response_metadata = {
+                    "model_name": self.model_name or self.model
+                }
+                message.usage_metadata = _create_usage_metadata(token_usage)
+            gen = ChatGeneration(
+                message=message,
+                generation_info=dict(finish_reason=res.get("finish_reason")),
+            )
+            generations.append(gen)
+        set_model_value = self.model
+        if self.model_name is not None:
+            set_model_value = self.model_name
+        llm_output = {"token_usage": token_usage, "model": set_model_value}
+        return ChatResult(generations=generations, llm_output=llm_output)
+
+    def _create_message_dicts(
+        self, messages: List[BaseMessage], stop: Optional[List[str]]
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        params = self._client_params
+        if stop is not None:
+            if "stop" in params:
+                raise ValueError("`stop` found in both the input and default params.")
+            params["stop"] = stop
+        message_dicts = [_convert_message_to_dict(m) for m in messages]
+        return message_dicts, params
+
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        raise NotImplementedError()
+
+    async def _astream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs, "stream": True}
+        params["stream_options"] = self.stream_options
+
+        default_chunk_class = AIMessageChunk
+
+        async for _untyped_chunk in await self.acompletion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
+        ):
+            litellm_chunk = _untyped_chunk
+            litellm_usage = getattr(litellm_chunk, "usage", None)
+
+            if len(litellm_chunk.choices) == 0:
+                continue
+
+            delta = litellm_chunk.choices[0].delta
+            message_chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+
+            if litellm_usage and isinstance(message_chunk, AIMessageChunk):
+                message_chunk.usage_metadata = _create_usage_metadata(litellm_usage)
+
+            default_chunk_class = message_chunk.__class__
+
+            cg_chunk = ChatGenerationChunk(message=message_chunk)
+            if run_manager:
+                await run_manager.on_llm_new_token(
+                    message_chunk.content, chunk=cg_chunk
+                )
+            yield cg_chunk
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        stream: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        should_stream = stream if stream is not None else self.streaming
+        if should_stream:
+            stream_iter = self._astream(
+                messages=messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+            return await agenerate_from_stream(stream_iter)
+
+        message_dicts, params = self._create_message_dicts(messages, stop)
+        params = {**params, **kwargs}
+        response = await self.acompletion_with_retry(
+            messages=message_dicts, run_manager=run_manager, **params
+        )
+        return self._create_chat_result(response)
+
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+        tool_choice: Optional[
+            Union[dict, str, Literal["auto", "none", "required", "any"], bool]
+        ] = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, BaseMessage]:
+        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+
+        if (
+            (self.model is not None and "azure" in self.model)
+            or (self.model_name is not None and "azure" in self.model_name)
+        ) and (tool_choice == "any" or isinstance(tool_choice, bool)):
+            tool_choice = "required"
+        elif isinstance(tool_choice, bool):
+            tool_choice = "any"
+        elif isinstance(tool_choice, dict):
+            tool_names = [
+                formatted_tool["function"]["name"]
+                for formatted_tool in formatted_tools
+            ]
+            if not any(
+                tool_name == tool_choice["function"]["name"]
+                for tool_name in tool_names
+            ):
+                raise ValueError(
+                    f"Tool choice {tool_choice} was specified, but the only "
+                    f"provided tools were {tool_names}."
+                )
+        return super().bind(tools=formatted_tools, tool_choice=tool_choice, **kwargs)
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        set_model_value = self.model
+        if self.model_name is not None:
+            set_model_value = self.model_name
+        return {
+            "model": set_model_value,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "n": self.n,
+        }
+
+    @property
+    def _llm_type(self) -> str:
+        return "litellm-chat"
+
+
+def _create_usage_metadata(usage: Any) -> UsageMetadata:
+    input_tokens = usage.prompt_tokens or 0
+    input_audio_tokens = (
+        getattr(usage.prompt_tokens_details, "audio_tokens", 0) or 0
+    )
+    output_tokens = usage.completion_tokens or 0
+    output_audio_tokens = (
+        getattr(usage.completion_tokens_details, "audio_tokens", 0) or 0
+    )
+    output_reasoning_tokens = (
+        getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
+    )
+    total_tokens = input_tokens + output_tokens
+
+    cache_creation_tokens = (
+        getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0) or 0
+    )
+    cache_read_tokens = (
+        getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+    )
+
+    return UsageMetadata(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        input_token_details={
+            "cache_creation": cache_creation_tokens,
+            "cache_read": cache_read_tokens,
+            "audio": input_audio_tokens,
+        },
+        output_token_details={
+            "audio": output_audio_tokens,
+            "reasoning": output_reasoning_tokens,
+        },
+    )
