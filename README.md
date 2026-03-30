@@ -73,7 +73,7 @@ GoodBot will search the relevant document stores, use web search if needed, and 
 
 ## Requirements
 
-- Python >= 3.10
+- Python >= 3.11
 - JupyterLab with `jupyter_ai >= 3.0.0b7`
 - OpenAI API key (for vector stores and embeddings)
 

@@ -20,7 +20,7 @@ SUPPORTED_EXTENSIONS = {
 class VectorStoreManager:
     """Manages three OpenAI Vector Stores for document search."""
 
-    STORE_NAMES = ["coding_rules", "dataset", "manuals"]
+    STORE_NAMES = ["manuals"]
 
     def __init__(self, config: GoodBotConfig | None = None):
         self._config = config or GoodBotConfig()
@@ -46,8 +46,6 @@ class VectorStoreManager:
 
     def _get_doc_path(self, store_name: str) -> str:
         paths = {
-            "coding_rules": self._config.coding_rules_path,
-            "dataset": self._config.dataset_path,
             "manuals": self._config.manuals_path,
         }
         return paths[store_name]
@@ -90,6 +88,8 @@ class VectorStoreManager:
             return
 
         for file_path in directory.rglob("*"):
+            if "cases" in file_path.parts:
+                continue
             if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 try:
                     with open(file_path, "rb") as f:

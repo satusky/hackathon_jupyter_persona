@@ -39,7 +39,7 @@ src/goodbot/
 
 **Key patterns (from Jupyternaut reference):**
 - Persona extends `BasePersona` from `jupyter_ai_persona_manager`
-- Agent uses `create_agent` from `langchain.agents` with `AsyncSqliteSaver` checkpointer
+- Agent uses `create_react_agent` from `langgraph.prebuilt` with `MemorySaver` checkpointer
 - Streaming via `agent.astream()` with `stream_mode="messages"` → `self.stream_message()`
 - Tool errors handled via `wrap_tool_call` middleware
 - JupyterLab tools imported from `jupyter_ai_jupyternaut.jupyternaut.toolkits`

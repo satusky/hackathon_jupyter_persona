@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,12 +10,15 @@ class GoodBotConfig(BaseSettings):
     model_id: str = "openai/gpt-4o-mini"
 
     # Document store paths (directories containing documents to index)
-    coding_rules_path: str = "./docs/coding_rules"
-    dataset_path: str = "./docs/dataset"
-    manuals_path: str = "./docs/manuals"
+    coding_rules_path: str = os.path.expanduser("~/coding_rules")
+    dataset_path: str = os.path.expanduser("~/dataset")
+    manuals_path: str = os.path.expanduser("~/manuals")
 
     # Persisted vector store IDs
-    store_ids_path: str = "./.goodbot/store_ids.json"
+    store_ids_path: str = os.path.expanduser("~/.goodbot/store_ids.json")
+
+    # Notebook workspace root (notebook tools resolve paths relative to this)
+    notebook_workspace: str = os.path.expanduser("~")
 
     # Model parameters
     temperature: float = 0.1

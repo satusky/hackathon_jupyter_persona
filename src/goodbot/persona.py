@@ -1,5 +1,6 @@
 """GoodBot persona — the main entry point for the Jupyter AI persona."""
 
+import logging
 import os
 from typing import Any
 
@@ -11,6 +12,13 @@ from .chat_models import ChatLiteLLM
 from .config import GoodBotConfig
 from .prompt_template import GOODBOT_SYSTEM_PROMPT_TEMPLATE, GoodBotSystemPromptArgs
 from .tools import get_all_tools
+
+# File logger for debugging in environments where server logs are inaccessible
+_flog = logging.getLogger("goodbot.debug")
+_flog.setLevel(logging.DEBUG)
+_fh = logging.FileHandler(os.path.expanduser("~/goodbot_debug.log"))
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+_flog.addHandler(_fh)
 
 GOODBOT_AVATAR_PATH = str(
     os.path.abspath(
@@ -35,6 +43,7 @@ class GoodBotPersona(BasePersona):
         )
 
     async def process_message(self, message: Message) -> None:
+        _flog.info("process_message: sender=%s body=%r", message.sender, message.body[:100])
         try:
             config = GoodBotConfig()
 
@@ -80,8 +89,11 @@ class GoodBotPersona(BasePersona):
             await self.stream_message(create_aiter())
 
         except Exception as e:
-            self.log.exception("Error while processing message.")
-            self.send_message(f"Error: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            _flog.error("Error in process_message:\n%s", tb)
+            _fh.flush()
+            self.send_message(f"Error: {e}\n\n```\n{tb}\n```")
 
     def _get_system_prompt(
         self, model_id: str, message: Message
@@ -98,13 +110,6 @@ class GoodBotPersona(BasePersona):
         return GOODBOT_SYSTEM_PROMPT_TEMPLATE.render(**args)
 
     def shutdown(self):
-        from .agent import get_memory_store
-
-        async def _close():
-            store_state = get_memory_store.__defaults__[0]
-            if store_state and store_state.get("instance"):
-                await store_state["instance"].conn.close()
-
-        if hasattr(self, "parent") and hasattr(self.parent, "event_loop"):
-            self.parent.event_loop.create_task(_close())
+        from .tools.notebook import cleanup_all_kernels
+        cleanup_all_kernels()
         super().shutdown()
