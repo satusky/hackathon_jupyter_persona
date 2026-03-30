@@ -3,7 +3,7 @@
 import os
 from typing import Any
 
-from jupyter_ai_persona_manager import BasePersona, PersonaDefaults
+from jupyter_ai.personas import BasePersona, PersonaDefaults
 from jupyterlab_chat.models import Message
 
 from .agent import build_agent
@@ -73,11 +73,9 @@ class GoodBotPersona(BasePersona):
                     {"configurable": context},
                     stream_mode="messages",
                 ):
-                    node = metadata["langgraph_node"]
-                    content_blocks = token.content_blocks
-                    if node == "model" and content_blocks:
-                        if token.text:
-                            yield token.text
+                    node = metadata.get("langgraph_node", "")
+                    if node == "agent" and isinstance(token.content, str) and token.content:
+                        yield token.content
 
             await self.stream_message(create_aiter())
 
