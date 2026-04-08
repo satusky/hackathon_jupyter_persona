@@ -6,7 +6,7 @@ from .doc_search import (
     list_manuals,
     search_manuals,
 )
-from .web_search import web_search
+from .web_search import web_fetch, web_search
 from .notebook import (
     list_notebooks,
     read_notebook,
@@ -26,6 +26,7 @@ def get_all_tools():
         list_manuals,
         search_manuals,
         web_search,
+        web_fetch,
         list_notebooks,
         read_notebook,
         edit_notebook_cell,
