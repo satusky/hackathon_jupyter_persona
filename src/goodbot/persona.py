@@ -55,13 +55,17 @@ class GoodBotPersona(BasePersona):
                 model_id = config.model_id
                 model_args = {}
 
-            model = ChatLiteLLM(
+            # gpt-5 family models do not accept the temperature parameter
+            supports_temperature = "gpt-5" not in model_id
+            model_kwargs = {
                 **model_args,
-                model=model_id,
-                streaming=True,
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-            )
+                "model": model_id,
+                "streaming": True,
+                "max_tokens": config.max_tokens,
+            }
+            if config.temperature is not None and supports_temperature:
+                model_kwargs["temperature"] = config.temperature
+            model = ChatLiteLLM(**model_kwargs)
 
             system_prompt = self._get_system_prompt(
                 model_id=model_id, message=message

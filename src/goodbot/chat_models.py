@@ -258,16 +258,18 @@ class ChatLiteLLM(BaseChatModel):
         set_model_value = self.model
         if self.model_name is not None:
             set_model_value = self.model_name
-        return {
+        params = {
             "model": set_model_value,
             "force_timeout": self.request_timeout,
             "max_tokens": self.max_tokens,
             "stream": self.streaming,
             "n": self.n,
-            "temperature": self.temperature,
             "custom_llm_provider": self.custom_llm_provider,
             **self.model_kwargs,
         }
+        if self.temperature is not None:
+            params["temperature"] = self.temperature
+        return params
 
     @property
     def _client_params(self) -> Dict[str, Any]:

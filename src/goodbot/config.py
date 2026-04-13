@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,5 +22,5 @@ class GoodBotConfig(BaseSettings):
     notebook_workspace: str = os.path.expanduser("~")
 
     # Model parameters
-    temperature: float = 0.1
+    temperature: Optional[float] = 0.1
     max_tokens: int = 4096
