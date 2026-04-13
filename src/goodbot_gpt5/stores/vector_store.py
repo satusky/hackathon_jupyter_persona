@@ -68,7 +68,7 @@ class VectorStoreManager:
             del self._store_ids[store_name]
 
         store = self._client.vector_stores.create(
-            name=f"goodbot_{store_name}",
+            name=f"goodbot_gpt5_{store_name}",
         )
         store_id = store.id
         self._store_ids[store_name] = store_id

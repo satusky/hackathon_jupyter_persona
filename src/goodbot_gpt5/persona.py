@@ -1,4 +1,4 @@
-"""GoodBot persona — the main entry point for the Jupyter AI persona."""
+"""GoodBot-GPT5 persona — the main entry point for the Jupyter AI persona."""
 
 import logging
 import os
@@ -14,9 +14,9 @@ from .prompt_template import GOODBOT_SYSTEM_PROMPT_TEMPLATE, GoodBotSystemPrompt
 from .tools import get_all_tools
 
 # File logger for debugging in environments where server logs are inaccessible
-_flog = logging.getLogger("goodbot.debug")
+_flog = logging.getLogger("goodbot_gpt5.debug")
 _flog.setLevel(logging.DEBUG)
-_fh = logging.FileHandler(os.path.expanduser("~/goodbot_debug.log"))
+_fh = logging.FileHandler(os.path.expanduser("~/goodbot_gpt5_debug.log"))
 _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 _flog.addHandler(_fh)
 
@@ -36,10 +36,10 @@ class GoodBotPersona(BasePersona):
     @property
     def defaults(self):
         return PersonaDefaults(
-            name="goodbot",
+            name="goodbot-gpt5",
             avatar_path=GOODBOT_AVATAR_PATH,
             description="Clinical data extraction assistant with document search, web search, and notebook tools.",
-            system_prompt="You are GoodBot, an AI assistant for a clinical data extraction hackathon.",
+            system_prompt="You are GoodBot-GPT5, an AI assistant for a clinical data extraction hackathon.",
         )
 
     async def process_message(self, message: Message) -> None:

@@ -17,7 +17,7 @@ from .notebook import (
 
 
 def get_all_tools():
-    """Aggregate all tools available to the GoodBot agent."""
+    """Aggregate all tools available to the GoodBot-GPT5 agent."""
     tools = [
         list_coding_rules_files,
         read_coding_rules_file,

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "hackathon-jupyter-persona"
+name = "goodbot-gpt5"
 version = "0.1.0"
-description = "GoodBot - A Jupyter AI persona for clinical data extraction hackathon"
+description = "GoodBot-GPT5 - A Jupyter AI persona for clinical data extraction hackathon"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.entry-points."jupyter_ai.personas"]
-goodbot = "goodbot.persona:GoodBotPersona"
+goodbot-gpt5 = "goodbot_gpt5.persona:GoodBotPersona"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/goodbot"]
+packages = ["src/goodbot_gpt5"]

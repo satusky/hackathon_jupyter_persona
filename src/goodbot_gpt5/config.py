@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class GoodBotConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GOODBOT_")
+    model_config = SettingsConfigDict(env_prefix="GOODBOT_GPT5_")
 
     # LLM model ID (passed to LiteLLM)
     model_id: str = "openai/gpt-4o-mini"
@@ -16,7 +16,7 @@ class GoodBotConfig(BaseSettings):
     manuals_path: str = os.path.expanduser("~/manuals")
 
     # Persisted vector store IDs
-    store_ids_path: str = os.path.expanduser("~/.goodbot/store_ids.json")
+    store_ids_path: str = os.path.expanduser("~/.goodbot_gpt5/store_ids.json")
 
     # Notebook workspace root (notebook tools resolve paths relative to this)
     notebook_workspace: str = os.path.expanduser("~")

@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project builds a custom Jupyter-AI 3.x persona (`@goodbot`) for a clinical data extraction hackathon. The persona runs inside a JupyterLab instance in Azure with `jupyter_ai==3.0.0b7`.
+This project builds a custom Jupyter-AI 3.x persona (`@goodbot-gpt5`) for a clinical data extraction hackathon. The persona runs inside a JupyterLab instance in Azure with `jupyter_ai==3.0.0b7`.
 
 ## Key Requirements
 
-- **Persona name**: `@goodbot` (referenced in Jupyter-AI chat via `@goodbot`)
+- **Persona name**: `@goodbot-gpt5` (referenced in Jupyter-AI chat via `@goodbot-gpt5`)
 - **Capabilities**: Agentic loop (ReAct), document search, web search, JupyterLab MCP tools (cell editing, execution)
 - **Three configurable document stores** (OpenAI Vector Stores API):
   - `coding_rules` — coding guidelines
@@ -21,11 +21,11 @@ This project builds a custom Jupyter-AI 3.x persona (`@goodbot`) for a clinical 
 ## Architecture
 
 ```
-src/goodbot/
+src/goodbot_gpt5/
 ├── persona.py          # GoodBotPersona(BasePersona) — entry point, process_message
 ├── agent.py            # build_agent() using langchain.agents.create_agent (LangGraph ReAct)
 ├── chat_models.py      # ChatLiteLLM — LangChain BaseChatModel wrapping LiteLLM
-├── config.py           # GoodBotConfig(BaseSettings) — env vars with GOODBOT_ prefix
+├── config.py           # GoodBotConfig(BaseSettings) — env vars with GOODBOT_GPT5_ prefix
 ├── prompt_template.py  # Jinja2 system prompt for clinical data extraction
 ├── tools/
 │   ├── __init__.py     # get_all_tools() — aggregates all tools
@@ -53,17 +53,17 @@ pip install -e .
 # After install, restart JupyterLab or use /refresh-personas in chat
 
 # Configuration via environment variables (all optional, have defaults)
-export GOODBOT_MODEL_ID="openai/gpt-4o-mini"
-export GOODBOT_CODING_RULES_PATH="./docs/coding_rules"
-export GOODBOT_DATASET_PATH="./docs/dataset"
-export GOODBOT_MANUALS_PATH="./docs/manuals"
+export GOODBOT_GPT5_MODEL_ID="openai/gpt-4o-mini"
+export GOODBOT_GPT5_CODING_RULES_PATH="./docs/coding_rules"
+export GOODBOT_GPT5_DATASET_PATH="./docs/dataset"
+export GOODBOT_GPT5_MANUALS_PATH="./docs/manuals"
 ```
 
 ## Important Notes
 
 - `environment_packages.txt` documents what's installed in the **target** Azure JupyterLab environment — NOT local project dependencies
-- The `pyproject.toml` entry point `goodbot = "goodbot.persona:GoodBotPersona"` registers the persona
-- Build system is `hatchling` with `packages = ["src/goodbot"]`
+- The `pyproject.toml` entry point `goodbot-gpt5 = "goodbot_gpt5.persona:GoodBotPersona"` registers the persona
+- Build system is `hatchling` with `packages = ["src/goodbot_gpt5"]`
 - `ChatLiteLLM` in `chat_models.py` is adapted from Jupyternaut — it wraps LiteLLM to work as a LangChain chat model
-- Vector store IDs are persisted in `.goodbot/store_ids.json` to avoid re-uploading docs on restart
+- Vector store IDs are persisted in `.goodbot_gpt5/store_ids.json` to avoid re-uploading docs on restart
 - `duckduckgo-search` may not be installed in the target env — web search tool handles the ImportError gracefully

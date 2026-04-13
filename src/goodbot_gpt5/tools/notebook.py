@@ -11,7 +11,7 @@ from jupyter_client.manager import KernelManager
 from ..config import GoodBotConfig
 
 _config = GoodBotConfig()
-_log = logging.getLogger("goodbot.debug")
+_log = logging.getLogger("goodbot_gpt5.debug")
 
 # Persistent kernel clients keyed by absolute notebook path
 _notebook_clients: dict[str, tuple[KernelManager, NotebookClient]] = {}
